@@ -1,20 +1,3 @@
-/*    Modified CW Decoder for Ten Tec Patriot
-   Use an ATmeg328P on prototype board inside Patriot
-   1) Removed an lcd references
-   2) Sent the translated code to the Patriot from Serial port
-   3) Received on the Patriot over Serial 1.
-   4) Pin 35 is toggled by the patriot to turn on decoding
-      Read on Pin 3
-   5) Analog read changed to A2 due to proximity A6 on Patriot
-   
-   Original source code is found http://www.skovholm.com/cwdecoder
-   
- */
-
-#include <Wire.h>
-#include <LiquidCrystal_I2C.h>
-LiquidCrystal_I2C lcd(0x27, 2, 1, 0, 4, 5, 6, 7, 3, POSITIVE);  // Set the LCD I2C address tp 0x27
-
 ///////////////////////////////////////////////////////////////////////
 // CW Decoder made by Hjalmar Skovholm Hansen OZ1JHM  VER 1.01       //
 // Feel free to change, copy or what ever you like but respect       //
@@ -27,12 +10,41 @@ LiquidCrystal_I2C lcd(0x27, 2, 1, 0, 4, 5, 6, 7, 3, POSITIVE);  // Set the LCD I
 // Read more here http://en.wikipedia.org/wiki/Goertzel_algorithm        //
 // if you want to know about FFT the http://www.dspguide.com/pdfbook.htm //
 ///////////////////////////////////////////////////////////////////////////
+#include <Wire.h>  // Comes with Arduino IDE
+#include <LiquidCrystal_I2C.h>
 
+/*-----( Declare Constants )-----*/
+/*-----( Declare objects )-----*/
+// set the LCD address to 0x27 for a 20 chars 4 line display
+// Set the pins on the I2C chip used for LCD connections:
+//                    addr, en,rw,rs,d4,d5,d6,d7,bl,blpol
+LiquidCrystal_I2C lcd(0x27, 2, 1, 0, 4, 5, 6, 7, 3, POSITIVE);  // Set the LCD I2C address
+
+const int colums = 20; /// have to be 16 or 20
+const int rows = 4;  /// have to be 2 or 4
+
+int lcdindex = 0;
+int line1[colums];
+int line2[colums];
+
+////////////////////////////////
+// Define 8 specials letters  //
+////////////////////////////////
+
+byte U_umlaut[8] =   {B01010,B00000,B10001,B10001,B10001,B10001,B01110,B00000}; // 'Ü'  
+byte O_umlaut[8] =   {B01010,B00000,B01110,B10001,B10001,B10001,B01110,B00000}; // 'Ö'  
+byte A_umlaut[8] =   {B01010,B00000,B01110,B10001,B11111,B10001,B10001,B00000}; // 'Ä'    
+byte AE_capital[8] = {B01111,B10100,B10100,B11110,B10100,B10100,B10111,B00000}; // 'Æ' 
+byte OE_capital[8] = {B00001,B01110,B10011,B10101,B11001,B01110,B10000,B00000}; // 'Ø' 
+byte fullblock[8] =  {B11111,B11111,B11111,B11111,B11111,B11111,B11111,B11111};  
+byte AA_capital[8] = {B00100,B00000,B01110,B10001,B11111,B10001,B10001,B00000}; // 'Å'   
+byte emtyblock[8] =  {B00000,B00000,B00000,B00000,B00000,B00000,B00000,B00000};  
 
 int audioInPin = A2;
 int audioOutPin = 10;
-int ledPin = 13;
 int switchPin = 3;
+int ledPin = 13;
+
 float magnitude ;
 int magnitudelimit = 100;
 int magnitudelimit_low = 100;
@@ -89,6 +101,7 @@ long laststarttime = 0;
 char code[20];
 int stop = LOW;
 int wpm;
+char lcdBuff[21] = "                    ";
 
 ////////////////
 // init setup //
@@ -105,14 +118,29 @@ void setup() {
   sine = sin(omega);
   cosine = cos(omega);
   coeff = 2.0 * cosine;
+
+///////////////////////////////
+// define special characters //
+///////////////////////////////
+ lcd.createChar(0, U_umlaut); //     German
+ lcd.createChar(1, O_umlaut); //     German, Swedish
+ lcd.createChar(2, A_umlaut); //     German, Swedish 
+ lcd.createChar(3, AE_capital); //   Danish, Norwegian
+ lcd.createChar(4, OE_capital); //   Danish, Norwegian
+ lcd.createChar(5, fullblock);        
+ lcd.createChar(6, AA_capital); //   Danish, Norwegian, Swedish
+ lcd.createChar(7, emtyblock); 
+ lcd.clear(); 
+
  Serial.begin(38400); 
  pinMode(ledPin, OUTPUT);
+ lcd.begin(colums, rows); 
  pinMode(switchPin, INPUT);
- digitalWrite(switchPin, HIGH);
-  lcd.begin(20, 4);                           // 20 chars 4 lines
-  lcd.clear();                                // WD9GYM modification adjusted by W8CQD
-
- 
+ for (int index = 0; index < colums; index++){
+    line1[index] = 32;
+	line2[index] = 32;
+ }           
+  
 }
 
 ///////////////
@@ -121,8 +149,10 @@ void setup() {
  void loop() {
   int switchState =    digitalRead(switchPin);
   if (switchState == -1) switchState = 1;
+  if (switchState == LOW) digitalWrite(ledPin, LOW);
  while(switchState == HIGH) {
    switchState =    digitalRead(switchPin);
+
   ///////////////////////////////////// 
   // The basic where we get the tone //
   /////////////////////////////////////
@@ -130,6 +160,7 @@ void setup() {
   for (char index = 0; index < n; index++)
   {
     testData[index] = analogRead(audioInPin);
+//Serial.println(analogRead(audioInPin));
   }
   for (char index = 0; index < n; index++){
 	  float Q0;
@@ -139,9 +170,11 @@ void setup() {
   }
   float magnitudeSquared = (Q1*Q1)+(Q2*Q2)-Q1*Q2*coeff;  // we do only need the real part //
   magnitude = sqrt(magnitudeSquared);
+// Serial.print("magnitude = "); Serial.println(magnitude);
   Q2 = 0;
   Q1 = 0;
 
+  //Serial.print(magnitude); Serial.println();  //// here you can measure magnitude for setup..
   
   /////////////////////////////////////////////////////////// 
   // here we will try to set the magnitude limit automatic //
@@ -209,11 +242,11 @@ void setup() {
   if (filteredstate == LOW){  //// we did end a HIGH
    if (highduration < (hightimesavg*2) && highduration > (hightimesavg*0.6)){ /// 0.6 filter out false dits
 	strcat(code,".");
-//	Serial.print(".");
+	//Serial.print(".");
    }
    if (highduration > (hightimesavg*2) && highduration < (hightimesavg*6)){ 
 	strcat(code,"-");
-//	Serial.print("-");
+	//Serial.print("-");
 	wpm = (wpm + (1200/((highduration)/3)))/2;  //// the most precise we can do ;o)
    }
   }
@@ -228,14 +261,13 @@ void setup() {
    if (lowduration > (hightimesavg*(2*lacktime)) && lowduration < hightimesavg*(5*lacktime)){ // letter space
     docode();
 	code[0] = '\0';
-//	Serial.print("/");
+	//Serial.print("/");
    }
    if (lowduration >= hightimesavg*(5*lacktime)){ // word space
     docode();
 	code[0] = '\0';
 	printascii(32);
-        Serial.print(" ");
-//	Serial.println();
+	//Serial.println();
    }
   }
  }
@@ -272,235 +304,73 @@ void setup() {
  lasthighduration = highduration;
  filteredstatebefore = filteredstate;
  }
- }
 
+ }
 ////////////////////////////////
 // translate cw code to ascii //
 ////////////////////////////////
 
 void docode(){
-    if (strcmp(code,".-") == 0){
-        printascii(65);
-        Serial.print("A");
-    }
-    if (strcmp(code,"-...") == 0){
-        printascii(66);
-        Serial.print("B");
-    }
-    if (strcmp(code,"-.-.") == 0){
-        printascii(67);
-        Serial.print("C");
-    }
-    if (strcmp(code,"-..") == 0) {
-        printascii(68);
-        Serial.print("D");
-    }
-    if (strcmp(code,".") == 0) {
-        printascii(69);
-        Serial.print("E");
-    }
-    if (strcmp(code,"..-.") == 0) {
-        printascii(70);
-        Serial.print("F");
-    }
-    if (strcmp(code,"--.") == 0) {
-        printascii(71);
-        Serial.print("G");
-    }
-    if (strcmp(code,"....") == 0) {
-        printascii(72);
-        Serial.print("H");
-    }
-    if (strcmp(code,"..") == 0) {
-        printascii(73);
-        Serial.print("I");
-    }
-    if (strcmp(code,".---") == 0) {
-        printascii(74);
-        Serial.print("J");
-    }
-    if (strcmp(code,"-.-") == 0) {
-        printascii(75);
-        Serial.print("K");
-    }
-    if (strcmp(code,".-..") == 0) {
-        printascii(76);
-        Serial.print("L");
-    }
-    if (strcmp(code,"--") == 0) {
-        printascii(77);
-        Serial.print("M");
-    }
-    if (strcmp(code,"-.") == 0) {
-        printascii(78);
-        Serial.print("N");
-    }
-    if (strcmp(code,"---") == 0) {
-        printascii(79);
-        Serial.print("O");
-    }
-    if (strcmp(code,".--.") == 0) {
-        printascii(80);
-        Serial.print("P");
-    }
-    if (strcmp(code,"--.-") == 0) {
-        printascii(81);
-        Serial.print("Q");
-    }
-    if (strcmp(code,".-.") == 0) {
-        printascii(82);
-        Serial.print("R");
-    }
-    if (strcmp(code,"...") == 0) {
-        printascii(83);
-        Serial.print("S");
-    }
-    if (strcmp(code,"-") == 0) {
-        printascii(84);
-        Serial.print("T");
-    }
-    if (strcmp(code,"..-") == 0) {
-        printascii(85);
-        Serial.print("U");
-    }
-    if (strcmp(code,"...-") == 0) {
-        printascii(86);
-        Serial.print("V");
-    }
-    if (strcmp(code,".--") == 0) {
-        printascii(87);
-        Serial.print("W");
-    }
-    if (strcmp(code,"-..-") == 0) {
-        printascii(88);
-        Serial.print("X");
-    }
-    if (strcmp(code,"-.--") == 0) {
-        printascii(89);
-        Serial.print("Y");
-    }
-    if (strcmp(code,"--..") == 0) {
-        printascii(90);
-        Serial.print("Z");
-    }
+    if (strcmp(code,".-") == 0) printascii(65);
+	if (strcmp(code,"-...") == 0) printascii(66);
+	if (strcmp(code,"-.-.") == 0) printascii(67);
+	if (strcmp(code,"-..") == 0) printascii(68);
+	if (strcmp(code,".") == 0) printascii(69);
+	if (strcmp(code,"..-.") == 0) printascii(70);
+	if (strcmp(code,"--.") == 0) printascii(71);
+	if (strcmp(code,"....") == 0) printascii(72);
+	if (strcmp(code,"..") == 0) printascii(73);
+	if (strcmp(code,".---") == 0) printascii(74);
+	if (strcmp(code,"-.-") == 0) printascii(75);
+	if (strcmp(code,".-..") == 0) printascii(76);
+	if (strcmp(code,"--") == 0) printascii(77);
+	if (strcmp(code,"-.") == 0) printascii(78);
+	if (strcmp(code,"---") == 0) printascii(79);
+	if (strcmp(code,".--.") == 0) printascii(80);
+	if (strcmp(code,"--.-") == 0) printascii(81);
+	if (strcmp(code,".-.") == 0) printascii(82);
+	if (strcmp(code,"...") == 0) printascii(83);
+	if (strcmp(code,"-") == 0) printascii(84);
+	if (strcmp(code,"..-") == 0) printascii(85);
+	if (strcmp(code,"...-") == 0) printascii(86);
+	if (strcmp(code,".--") == 0) printascii(87);
+	if (strcmp(code,"-..-") == 0) printascii(88);
+	if (strcmp(code,"-.--") == 0) printascii(89);
+	if (strcmp(code,"--..") == 0) printascii(90);
 
-    if (strcmp(code,".----") == 0) {
-        printascii(49);
-        Serial.print("1");
-    }
-    if (strcmp(code,"..---") == 0) {
-        printascii(50);
-        Serial.print("2");
-    }
-    if (strcmp(code,"...--") == 0) {
-        printascii(51);
-        Serial.print("3");
-    }
-    if (strcmp(code,"....-") == 0) {
-        printascii(52);
-        Serial.print("4");
-    }
-    if (strcmp(code,".....") == 0) {
-        printascii(53);
-        Serial.print("5");
-    }
-    if (strcmp(code,"-....") == 0) {
-        printascii(54);
-        Serial.print("6");
-    }
-    if (strcmp(code,"--...") == 0) {
-        printascii(55);
-        Serial.print("7");
-    }
-    if (strcmp(code,"---..") == 0) {
-        printascii(56);
-        Serial.print("8");
-    }
-    if (strcmp(code,"----.") == 0) {
-        printascii(57);
-        Serial.print("9");
-    }
-    if (strcmp(code,"-----") == 0) {
-        printascii(48);
-        Serial.print("0");
-    }
+	if (strcmp(code,".----") == 0) printascii(49);
+	if (strcmp(code,"..---") == 0) printascii(50);
+	if (strcmp(code,"...--") == 0) printascii(51);
+	if (strcmp(code,"....-") == 0) printascii(52);
+	if (strcmp(code,".....") == 0) printascii(53);
+	if (strcmp(code,"-....") == 0) printascii(54);
+	if (strcmp(code,"--...") == 0) printascii(55);
+	if (strcmp(code,"---..") == 0) printascii(56);
+	if (strcmp(code,"----.") == 0) printascii(57);
+	if (strcmp(code,"-----") == 0) printascii(48);
 
-    if (strcmp(code,"..--..") == 0) {
-        printascii(63);
-        Serial.print("?");
-    }
-    if (strcmp(code,".-.-.-") == 0) {
-        printascii(46);
-        Serial.print(".");
-    }
-    if (strcmp(code,"--..--") == 0) {
-        printascii(44);
-        Serial.print(",");
-    }
-    if (strcmp(code,"-.-.--") == 0) {
-        printascii(33);
-        Serial.print("!");
-    }
-    if (strcmp(code,".--.-.") == 0) {
-        printascii(64);
-        Serial.print("@");
-    }
-    if (strcmp(code,"---...") == 0) {
-        printascii(58);
-        Serial.print(":");
-    }
-    if (strcmp(code,"-....-") == 0) {
-        printascii(45);
-        Serial.print("-");
-    }
-    if (strcmp(code,"-..-.") == 0) {
-        printascii(47);
-        Serial.print("/");
-    }
+	if (strcmp(code,"..--..") == 0) printascii(63);
+	if (strcmp(code,".-.-.-") == 0) printascii(46);
+	if (strcmp(code,"--..--") == 0) printascii(44);
+	if (strcmp(code,"-.-.--") == 0) printascii(33);
+	if (strcmp(code,".--.-.") == 0) printascii(64);
+	if (strcmp(code,"---...") == 0) printascii(58);
+	if (strcmp(code,"-....-") == 0) printascii(45);
+	if (strcmp(code,"-..-.") == 0) printascii(47);
 
-    if (strcmp(code,"-.--.") == 0) {
-        printascii(40);
-        Serial.print("(");
-    }
-    if (strcmp(code,"-.--.-") == 0) {
-        printascii(41);
-        Serial.print(")");
-    }
-    if (strcmp(code,".-...") == 0) {
-        printascii(95);
-        Serial.print("_");
-    }
-    if (strcmp(code,"...-..-") == 0) {
-        printascii(36);
-        Serial.print("$");
-    }
-    if (strcmp(code,"...-.-") == 0) {
-        printascii(62);
-        Serial.print(">");
-    }
-    if (strcmp(code,".-.-.") == 0) {
-        printascii(60);
-        Serial.print("<");
-    }
-    if (strcmp(code,"...-.") == 0) {
-        printascii(126);
-        Serial.print("~");
-    }
+	if (strcmp(code,"-.--.") == 0) printascii(40);
+	if (strcmp(code,"-.--.-") == 0) printascii(41);
+	if (strcmp(code,".-...") == 0) printascii(95);
+	if (strcmp(code,"...-..-") == 0) printascii(36);
+	if (strcmp(code,"...-.-") == 0) printascii(62);
+	if (strcmp(code,".-.-.") == 0) printascii(60);
+	if (strcmp(code,"...-.") == 0) printascii(126);
 	//////////////////
 	// The specials //
 	//////////////////
-    if (strcmp(code,".-.-") == 0) {
-        printascii(3);
-        Serial.print("+");
-    }
-    if (strcmp(code,"---.") == 0) {
-        printascii(4);
-        Serial.print("*");
-    }
-    if (strcmp(code,".--.-") == 0) {
-        printascii(6);
-        Serial.print("r");
-    }
+	if (strcmp(code,".-.-") == 0) printascii(3);
+	if (strcmp(code,"---.") == 0) printascii(4);
+	if (strcmp(code,".--.-") == 0) printascii(6);
 
 }
 
@@ -510,9 +380,60 @@ void docode(){
 // special letters                 //
 /////////////////////////////////////
 void printascii(int asciinumber){
-    lcd.setCursor(0,0);
-    lcd.print(asciinumber);
+
+int fail = 0;
+if (rows == 4 and colums == 16)fail = -4; /// to fix the library problem with 4*16 display http://forum.arduino.cc/index.php/topic,14604.0.html
+ 
+ if (lcdindex > colums-1){
+  lcdindex = 0;
+  if (rows==4){
+	  for (int i = 0; i <= colums-1 ; i++){
+		lcd.setCursor(i,rows-3);
+		lcd.write(line2[i]);
+		line2[i]=line1[i];
+	  }
+   }
+  for (int i = 0; i <= colums-1 ; i++){
+    lcd.setCursor(i+fail,rows-2);
+    lcd.write(line1[i]);
+	lcd.setCursor(i+fail,rows-1);
+    lcd.write(32);
+  }
+ }
+ line1[lcdindex]=asciinumber;
+ lcd.setCursor(lcdindex+fail,rows-1);
+ lcd.write(asciinumber);
+ Serial.write(asciinumber);
+ lcdindex += 1;
+
 }
 
 void updateinfolinelcd(){
+/////////////////////////////////////
+// here we update the upper line   //
+// with the speed.                 //
+/////////////////////////////////////
+
+  int place;
+ 
+  if (rows == 4){
+   place = colums/2;}
+  else{
+   place = 2;
+  }
+	if (wpm<10){
+		lcd.setCursor((place)-2,0);
+		lcd.print("0");
+		lcd.setCursor((place)-1,0);
+		lcd.print(wpm);
+		lcd.setCursor((place),0);
+		lcd.print(" WPM");
+	}
+	else{
+		lcd.setCursor((place)-2,0);
+		lcd.print(wpm);
+		lcd.setCursor((place),0);
+		lcd.print(" WPM ");
+	}
+
 }
