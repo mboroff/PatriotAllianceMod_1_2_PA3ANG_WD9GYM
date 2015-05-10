@@ -1,0 +1,37 @@
+W 10  LSB SK S 0[1;1H[2J7077.01 RIT 0
+W 10  LSB SK S 0[1;1H[2J7077.01 RIT 0
+W 10  LSB SK S 0[1;1H[2J7077.01 RIT 0
+
+void Terminal_Refresh()
+
+{
+  
+        if ( terminal ) {
+    
+             Serial.print("\e[1;1H\e[2J");                      // Cursor to 1,1 left top corner
+
+    
+             // 1st Line frequency and RIT or Message
+    
+            RX_frequency = frequency_tune - IF;
+    
+            Serial.print(RX_frequency * 0.001);
+    
+            Serial.print(" RIT ");
+    
+            //RIT 
+    
+            Serial.print(RitFreqOffset);
+    
+            Serial.println();
+    
+             // 2nd line, BW, STEP, MODE, SPEED
+    
+            if ( !ST_key )  Serial.print(bwtext[Selected_BW] + " " + steptext[Selected_Step] + " " + modetext[((mode*2)+bsm)] + " " + 
+               CWSpeed + " S " + level);
+    
+            if ( ST_key )   Serial.print(bwtext[Selected_BW] + " " + steptext[Selected_Step] + " " + modetext[((mode*2)+bsm)] + " SK S " + 
+                level);
+
+  }
+}
